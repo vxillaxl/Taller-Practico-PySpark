@@ -1,10 +1,3 @@
-"""
-Taller 1 – ETL con PySpark (Online Retail Dataset)
-
-Proceso ETL + las 10 operaciones y las 10 consultas del enunciado.
-Cada pregunta es una consulta independiente.
-"""
-
 import os
 import shutil
 import sys
@@ -20,17 +13,41 @@ from pyspark.sql.functions import (
     col,
     count,
     countDistinct,
+    date_format,
+    dayofmonth,
+    hour,
     lit,
     max as spark_max,
     min as spark_min,
     month,
     rank,
+    regexp_replace,
     round as spark_round,
     row_number,
     sum as spark_sum,
     to_timestamp,
+    trim,
+    when,
     year,
 )
+
+COLUMNAS_15 = [
+    "InvoiceNo",
+    "StockCode",
+    "Description",
+    "Quantity",
+    "InvoiceDate",
+    "UnitPrice",
+    "CustomerID",
+    "Country",
+    "TotalAmount",
+    "Year",
+    "Month",
+    "Day",
+    "Hour",
+    "DayOfWeek",
+    "InvoiceType",
+]
 
 ROOT = Path(__file__).resolve().parent
 DATOS = ROOT / "data" / "raw" / "online_retail.csv"
@@ -69,13 +86,46 @@ def crear_spark():
     )
 
 
+def limpiar_datos(df):
+    filas_antes = df.count()
+    df = (
+        df.withColumn("InvoiceNo", trim(col("InvoiceNo").cast("string")))
+        .withColumn("StockCode", trim(col("StockCode").cast("string")))
+        .withColumn("Description", regexp_replace(trim(col("Description")), r"\s+", " "))
+        .withColumn("Country", trim(col("Country")))
+        .withColumn("CustomerID", col("CustomerID").cast("int"))
+    )
+    df = df.dropDuplicates()
+    df = df.filter(
+        col("InvoiceNo").isNotNull()
+        & (col("InvoiceNo") != "")
+        & col("StockCode").isNotNull()
+        & (col("StockCode") != "")
+        & col("Description").isNotNull()
+        & (col("Description") != "")
+        & col("InvoiceDate").isNotNull()
+        & (col("UnitPrice") >= 0)
+        & col("Quantity").isNotNull()
+        & col("Country").isNotNull()
+        & (col("Country") != "")
+    )
+    filas_despues = df.count()
+    print("Limpieza:")
+    print("  Filas originales:", filas_antes)
+    print("  Filas después de limpiar:", filas_despues)
+    print("  Filas eliminadas:", filas_antes - filas_despues)
+    print("  Se quitaron duplicados, descripciones vacías, precios negativos y espacios.")
+    print("  CustomerID nulo se deja: son compras sin cliente registrado.")
+    print("  Quantity negativa se deja: son devoluciones (pregunta 10).")
+    return df
+
+
 def extraer_dataset():
-    """EXTRACT: descarga el Excel oficial de UCI y lo deja en CSV."""
     DATOS.parent.mkdir(parents=True, exist_ok=True)
     if DATOS.exists() and DATOS.stat().st_size > 0:
-        print("EXTRACT: dataset ya esta en", DATOS)
+        print("dataset ya esta descargado")
         return
-    print("EXTRACT: descargando Online Retail desde UCI...")
+    print("descargando dataset de UCI...")
     respuesta = requests.get(URL_DATASET, timeout=120)
     respuesta.raise_for_status()
     with zipfile.ZipFile(BytesIO(respuesta.content)) as zf:
@@ -83,11 +133,10 @@ def extraer_dataset():
         with zf.open(xlsx) as fh:
             crudo = pd.read_excel(fh, engine="openpyxl")
     crudo.to_csv(DATOS, index=False, encoding="utf-8")
-    print("EXTRACT: guardado", DATOS, "filas:", len(crudo))
+    print("listo,", len(crudo), "filas")
 
 
 def guardar_csv(df, nombre):
-    """LOAD: write.csv()"""
     RESULTADOS.mkdir(parents=True, exist_ok=True)
     destino = RESULTADOS / nombre
     tmp = RESULTADOS / f"_tmp_{destino.stem}"
@@ -103,16 +152,14 @@ def guardar_csv(df, nombre):
     df.show(truncate=False)
 
 
-# ---------- 10 consultas independientes ----------
-
 def pregunta_01_total_facturas(df):
-    print("\nPregunta 1: numero total de facturas")
+    print("\nPregunta 1: número total de facturas")
     resultado = df.agg(countDistinct("InvoiceNo").alias("total_facturas"))
     guardar_csv(resultado, "01_total_facturas.csv")
 
 
 def pregunta_02_clientes_unicos(df):
-    print("\nPregunta 2: numero de clientes unicos")
+    print("\nPregunta 2: número de clientes únicos")
     resultado = df.filter(col("CustomerID").isNotNull()).agg(
         countDistinct("CustomerID").alias("clientes_unicos")
     )
@@ -126,7 +173,7 @@ def pregunta_03_ingreso_total(df):
 
 
 def pregunta_04_producto_mas_vendido(df):
-    print("\nPregunta 4: producto mas vendido en cantidad")
+    print("\nPregunta 4: producto más vendido en cantidad")
     ventana = Window.orderBy(col("cantidad_total").desc())
     resultado = (
         df.groupBy("StockCode", "Description")
@@ -161,7 +208,7 @@ def pregunta_05_cliente_mayor_compra(df):
 
 
 def pregunta_06_top5_paises_fuera_uk(df):
-    print("\nPregunta 6: 5 paises que mas compran fuera de Reino Unido")
+    print("\nPregunta 6: 5 países que más compran fuera de Reino Unido")
     resultado = (
         df.filter(col("Country") != "United Kingdom")
         .groupBy("Country")
@@ -183,7 +230,7 @@ def pregunta_07_ticket_promedio(df):
 
 
 def pregunta_08_productos_por_factura(df):
-    print("\nPregunta 8: minimo, maximo y promedio de productos por factura")
+    print("\nPregunta 8: mínimo, máximo y promedio de productos por factura")
     resultado = (
         df.groupBy("InvoiceNo")
         .agg(count("*").alias("productos"))
@@ -197,7 +244,7 @@ def pregunta_08_productos_por_factura(df):
 
 
 def pregunta_09_mes_mas_ventas(df):
-    print("\nPregunta 9: mes del anio con mas ventas")
+    print("\nPregunta 9: mes del año con más ventas")
     resultado = (
         df.groupBy("Year", "Month")
         .agg(spark_round(spark_sum("TotalAmount"), 2).alias("ingreso_total"))
@@ -236,8 +283,7 @@ def main():
     spark = crear_spark()
     spark.sparkContext.setLogLevel("WARN")
 
-    # 1. Lectura de datos
-    print("\n[1] Lectura: spark.read.format('csv')")
+    print("leyendo csv")
     df = (
         spark.read.format("csv")
         .option("header", "true")
@@ -245,8 +291,6 @@ def main():
         .load(DATOS.as_posix())
     )
 
-    # 2. Seleccion de columnas
-    print("[2] select()")
     df = df.select(
         col("InvoiceNo"),
         col("StockCode"),
@@ -258,26 +302,25 @@ def main():
         col("Country"),
     )
 
-    # 3. Filtrado (se usa tambien en las consultas 2, 6 y 10)
-    print("[3] filter()")
-    df = df.filter(col("InvoiceDate").isNotNull())
+    print("limpiando datos")
+    df = limpiar_datos(df)
 
-    # 7. Columnas derivadas
-    print("[7] withColumn()")
     df = (
         df.withColumn("TotalAmount", col("Quantity") * col("UnitPrice"))
         .withColumn("Year", year("InvoiceDate"))
         .withColumn("Month", month("InvoiceDate"))
+        .withColumn("Day", dayofmonth("InvoiceDate"))
+        .withColumn("Hour", hour("InvoiceDate"))
+        .withColumn("DayOfWeek", date_format("InvoiceDate", "EEEE"))
+        .withColumn(
+            "InvoiceType",
+            when(col("Quantity") < 0, lit("Return")).otherwise(lit("Sale")),
+        )
+        .select(*COLUMNAS_15)
     )
     df.cache()
-    print("Filas:", df.count())
-
-    print("\n[4] orderBy()  -> consultas 6 y 9")
-    print("[5] sum, avg, min, max, count  -> consultas 3, 7 y 8")
-    print("[6] groupBy() + agg()  -> consultas 4 a 9")
-    print("[8] join()  -> consultas 5 y 10")
-    print("[9] rank() y row_number()  -> consultas 4 y 5")
-    print("[10] write.csv()  -> cada resultado")
+    print("filas:", df.count())
+    print("columnas:", df.columns)
 
     pregunta_01_total_facturas(df)
     pregunta_02_clientes_unicos(df)
@@ -291,7 +334,7 @@ def main():
     pregunta_10_porcentaje_devoluciones(df)
 
     spark.stop()
-    print("\nListo. CSV en resultados/")
+    print("listo")
 
 
 if __name__ == "__main__":
