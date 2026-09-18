@@ -110,13 +110,8 @@ def limpiar_datos(df):
         & (col("Country") != "")
     )
     filas_despues = df.count()
-    print("Limpieza:")
-    print("  Filas originales:", filas_antes)
-    print("  Filas después de limpiar:", filas_despues)
-    print("  Filas eliminadas:", filas_antes - filas_despues)
-    print("  Se quitaron duplicados, descripciones vacías, precios negativos y espacios.")
-    print("  CustomerID nulo se deja: son compras sin cliente registrado.")
-    print("  Quantity negativa se deja: son devoluciones (pregunta 10).")
+    print("filas antes:", filas_antes)
+    print("filas despues:", filas_despues)
     return df
 
 
